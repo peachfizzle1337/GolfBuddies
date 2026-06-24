@@ -1085,7 +1085,8 @@ async function loadDashboard() {
       const date = new Date(m.created_at).toLocaleDateString('de-DE', { day:'numeric', month:'short' });
       const mc = modeColors[m.game_mode] || { bg:'#f3f4f6', color:'#374151', icon:'⛳' };
       const isWin = winner !== 'Unentschieden' && winner !== '–';
-      const winnerShort = winner.split('(')[0].trim();
+      // Format: "Team A (Marcel & Lion)" → "Team A\nMarcel & Lion"
+      const winnerShort = winner.replace(/\(([^)]+)\)/, '\n$1').trim();
       const avatars = players.map(n => `<div style="width:28px;height:28px;border-radius:50%;background:var(--light-green);border:2px solid white;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;color:var(--fairway);margin-left:-6px;">${n[0]}</div>`).join('');
 
       return `<div style="background:white;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden;box-shadow:var(--shadow);">
@@ -1102,7 +1103,7 @@ async function loadDashboard() {
           <div style="display:flex;align-items:center;justify-content:space-between;">
             <div>
               <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem;">${isWin ? '🏆 Sieger' : '🤝 Ergebnis'}</div>
-              <div style="font-weight:700;font-size:.95rem;color:var(--deep-rough);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;">${winnerShort}</div>
+              <div style="font-weight:700;font-size:.95rem;color:var(--deep-rough);overflow:hidden;text-overflow:ellipsis;max-width:160px;white-space:pre-line;line-height:1.3;">${winnerShort}</div>
             </div>
             ${resultDetail ? `<div style="font-family:'JetBrains Mono',monospace;font-size:.9rem;font-weight:700;color:var(--fairway);background:var(--light-green);padding:.3rem .6rem;border-radius:6px;">${resultDetail}</div>` : ''}
           </div>
@@ -1475,13 +1476,13 @@ async function adminSaveHoles() {
 
   if (newScores.length) await sb.from('scores').insert(newScores);
 
-  // Recompute result_summary
-  const { data: m } = await sb.from('matches').select('result_summary, match_players(player_id, team, players(name))').eq('id', matchId).single();
+  // Recompute result_summary – fetch separately to avoid RLS nested join issues
+  const { data: m } = await sb.from('matches').select('result_summary').eq('id', matchId).single();
+  const mpPlayers = _editingPlayers; // already loaded in adminEditHoles
   let summary = {};
   try { summary = JSON.parse(m?.result_summary || '{}'); } catch {}
 
   if (mode === 'scramble') {
-    const mpPlayers = m?.match_players || [];
     const teamANames = mpPlayers.filter(p=>p.team==='A').map(p=>p.players?.name).join(' & ');
     const teamBNames = mpPlayers.filter(p=>p.team==='B').map(p=>p.players?.name).join(' & ');
     const teamALabel = `Team A (${teamANames})`;
@@ -1492,7 +1493,6 @@ async function adminSaveHoles() {
     summary.teamBName = teamBLabel;
     summary.winner = wonA > wonB ? teamALabel : wonB > wonA ? teamBLabel : 'Unentschieden';
   } else if (mode === 'matchplay') {
-    const mpPlayers = m?.match_players || [];
     const totals = mpPlayers.map(p => ({
       pid: p.player_id,
       name: p.players?.name,
@@ -1501,12 +1501,10 @@ async function adminSaveHoles() {
     summary.totals = totals;
     summary.winner = totals[0]?.won > (totals[1]?.won||0) ? totals[0].name : 'Unentschieden';
   } else if (mode === 'strokeplay') {
-    // Recalc strokeplay totals from newScores
     const totalsMap = {};
     newScores.forEach(s => {
       if (s.player_id) totalsMap[s.player_id] = (totalsMap[s.player_id]||0) + s.strokes;
     });
-    const mpPlayers = m?.match_players || [];
     const totals = mpPlayers.map(p => ({
       pid: p.player_id,
       name: p.players?.name,
@@ -1515,6 +1513,8 @@ async function adminSaveHoles() {
     summary.totals = totals;
     summary.winner = totals[0]?.name || 'Unentschieden';
   }
+
+  console.log('Saving result_summary:', JSON.stringify(summary));
 
   await sb.from('matches').update({ result_summary: JSON.stringify(summary) }).eq('id', matchId);
   showToast('Löcher & Ergebnis gespeichert! ✓');
