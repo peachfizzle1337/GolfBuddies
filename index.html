@@ -1079,8 +1079,20 @@ async function loadDashboard() {
       try {
         const r = JSON.parse(m.result_summary || '{}');
         winner = r.winner || '–';
-        if (r.wonA !== undefined) resultDetail = `${r.wonA} – ${r.wonB}`;
-        else if (r.totals) resultDetail = r.totals.map(t => `${t.name.split(' ')[0]} ${t.total||t.won}`).join(' · ');
+        if (r.wonA !== undefined) {
+          const halved = (m.holes||18) - r.wonA - r.wonB;
+          resultDetail = `${r.wonA} – ${halved > 0 ? halved+'½ – ' : ''}${r.wonB}`;
+          if (halved > 0) resultDetail = `${r.wonA} – ${halved}½ – ${r.wonB}`;
+          else resultDetail = `${r.wonA} – ${r.wonB}`;
+        } else if (r.totals) {
+          if (m.game_mode === 'matchplay') {
+            const total = r.totals.reduce((s,t) => s + (t.won||0), 0);
+            const halved = (m.holes||18) - total;
+            resultDetail = r.totals.map(t => `${t.name?.split(' ')[0]} ${t.won}`).join(' · ') + (halved > 0 ? ` · ${halved}½` : '');
+          } else {
+            resultDetail = r.totals.map(t => `${t.name?.split(' ')[0]} ${t.total}`).join(' · ');
+          }
+        }
       } catch {}
       const date = new Date(m.created_at).toLocaleDateString('de-DE', { day:'numeric', month:'short' });
       const mc = modeColors[m.game_mode] || { bg:'#f3f4f6', color:'#374151', icon:'⛳' };
@@ -1439,6 +1451,16 @@ async function adminSaveHoles() {
   const mode = _editingMode;
   const holeArr = Array.from({length: _editingHoles}, (_, i) => i + 1);
 
+  // Pre-save validation: all holes must be filled for matchplay/scramble
+  if (mode !== 'strokeplay') {
+    const selects = document.querySelectorAll('#hole-edit-content select[data-hole]');
+    const filledCount = [...selects].filter(s => s.value !== '').length;
+    if (filledCount !== _editingHoles) {
+      const missing = _editingHoles - filledCount;
+      if (!confirm(`${missing} Loch/Löcher noch ohne Ergebnis. Trotzdem speichern?`)) return;
+    }
+  }
+
   await sb.from('scores').delete().eq('match_id', matchId);
 
   const newScores = [];
@@ -1475,6 +1497,15 @@ async function adminSaveHoles() {
   }
 
   if (newScores.length) await sb.from('scores').insert(newScores);
+
+  // Validate total holes for scramble/matchplay
+  if (mode !== 'strokeplay') {
+    const filledHoles = document.querySelectorAll('#hole-edit-content select[data-hole]');
+    const filledCount = [...filledHoles].filter(s => s.value !== '').length;
+    if (filledCount !== _editingHoles) {
+      showToast(`⚠️ Nur ${filledCount} von ${_editingHoles} Löchern ausgefüllt – trotzdem gespeichert.`);
+    }
+  }
 
   // Recompute result_summary – fetch separately to avoid RLS nested join issues
   const { data: m } = await sb.from('matches').select('result_summary').eq('id', matchId).single();
@@ -1519,6 +1550,7 @@ async function adminSaveHoles() {
   await sb.from('matches').update({ result_summary: JSON.stringify(summary) }).eq('id', matchId);
   showToast('Löcher & Ergebnis gespeichert! ✓');
   closeHoleModal();
+  loadAdmin();
 }
 
 function closeHoleModal() {
