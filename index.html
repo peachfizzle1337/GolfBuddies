@@ -275,17 +275,22 @@
 
     <!-- DASHBOARD VIEW -->
     <div id="view-dashboard">
-      <div class="section-title">🏌️ Dashboard</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.2rem;flex-wrap:wrap;gap:.75rem;">
+        <div class="section-title" style="margin-bottom:0;">🏌️ Dashboard</div>
+        <select id="mode-filter" onchange="loadDashboard()" style="padding:.5rem .9rem;border-radius:var(--radius-sm);border:1.5px solid var(--border);font-family:inherit;font-size:.88rem;background:var(--white);cursor:pointer;">
+          <option value="all">Alle Modi</option>
+          <option value="scramble">Scramble</option>
+          <option value="matchplay">Matchplay</option>
+          <option value="strokeplay">Strokeplay</option>
+        </select>
+      </div>
       <div class="stats-grid" id="stats-grid">
-        <div class="stat-card"><div class="stat-num" id="stat-matches">–</div><div class="stat-label">Matches gesamt</div></div>
-        <div class="stat-card"><div class="stat-num" id="stat-holes">–</div><div class="stat-label">Löcher gespielt</div></div>
-        <div class="stat-card"><div class="stat-num" id="stat-best-player">–</div><div class="stat-label">Meiste Siege</div></div>
-        <div class="stat-card"><div class="stat-num" id="stat-last-mode">–</div><div class="stat-label">Letzter Modus</div></div>
+        <div class="stat-card"><div class="stat-num" id="stat-matches">–</div><div class="stat-label">Matches</div></div>
+        <div class="stat-card"><div class="stat-num" id="stat-holes">–</div><div class="stat-label">Löcher</div></div>
+        <div class="stat-card"><div class="stat-num" id="stat-best-player" style="font-size:1.3rem;">–</div><div class="stat-label">Meiste Siege</div></div>
+        <div class="stat-card"><div class="stat-num" id="stat-last-mode" style="font-size:1.3rem;">–</div><div class="stat-label">Letzter Modus</div></div>
       </div>
-      <div class="card">
-        <div class="card-title">📋 Match-Verlauf</div>
-        <div id="match-history-list"><div class="spinner"></div></div>
-      </div>
+      <div id="match-history-list"><div class="spinner"></div></div>
     </div>
 
     <!-- NEW MATCH VIEW -->
@@ -1002,12 +1007,14 @@ function resetSetup() {
 
 // ═══ DASHBOARD ════════════════════════════════════
 async function loadDashboard() {
-  const { data: matches } = await sb.from('matches')
+  const modeFilter = document.getElementById('mode-filter')?.value || 'all';
+  let query = sb.from('matches')
     .select('*, match_players(player_id, team, players(name)), scores(*)')
     .eq('status', 'finished')
     .order('created_at', { ascending: false })
-    .limit(20);
-
+    .limit(30);
+  if (modeFilter !== 'all') query = query.eq('game_mode', modeFilter);
+  const { data: matches } = await query;
   const all = matches || [];
 
   // Stats
@@ -1015,42 +1022,68 @@ async function loadDashboard() {
   const totalHoles = all.reduce((s,m) => s + (m.holes || 18), 0);
   document.getElementById('stat-holes').textContent = totalHoles;
 
-  // Count wins per player
   const wins = {};
   all.forEach(m => {
-    if (!m.result_summary) return;
     try {
-      const r = JSON.parse(m.result_summary);
-      if (r.winner) wins[r.winner] = (wins[r.winner]||0) + 1;
+      const r = JSON.parse(m.result_summary || '{}');
+      if (r.winner && r.winner !== 'Unentschieden') {
+        const name = r.winner.split('(')[0].trim().split(' ')[0];
+        wins[name] = (wins[name]||0) + 1;
+      }
     } catch {}
   });
   const topWinner = Object.entries(wins).sort((a,b)=>b[1]-a[1])[0];
-  document.getElementById('stat-best-player').textContent = topWinner ? topWinner[0].split(' ')[0] : '–';
-  document.getElementById('stat-last-mode').textContent = all[0]?.game_mode?.charAt(0).toUpperCase() + all[0]?.game_mode?.slice(1) || '–';
+  document.getElementById('stat-best-player').textContent = topWinner ? `${topWinner[0]} (${topWinner[1]}×)` : '–';
+  const lastMode = all[0]?.game_mode;
+  document.getElementById('stat-last-mode').textContent = lastMode ? lastMode.charAt(0).toUpperCase() + lastMode.slice(1) : '–';
 
-  // Match history
   const listEl = document.getElementById('match-history-list');
   if (!all.length) {
     listEl.innerHTML = '<div class="empty-state"><div class="empty-icon">⛳</div><p>Noch keine Matches gespielt.</p></div>';
     return;
   }
-  listEl.innerHTML = all.map(m => {
-    const playerNames = [...new Set((m.match_players||[]).map(mp => mp.players?.name).filter(Boolean))].join(', ');
-    let winner = '–';
-    try { winner = JSON.parse(m.result_summary || '{}').winner || '–'; } catch {}
-    const date = new Date(m.created_at).toLocaleDateString('de-DE');
-    const badgeClass = `badge-${m.game_mode}`;
-    return `<div class="match-history-item">
-      <div>
-        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.3rem;">
-          <span class="match-badge ${badgeClass}">${m.game_mode}</span>
-          <span class="match-meta">${date} · ${m.holes||18} Löcher</span>
+
+  const modeColors = {
+    matchplay: { bg: '#dbeafe', color: '#1e40af', icon: '🥊' },
+    strokeplay: { bg: '#fef3c7', color: '#92400e', icon: '✏️' },
+    scramble:   { bg: '#d1fae5', color: '#065f46', icon: '🤝' }
+  };
+
+  listEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem;">` +
+    all.map(m => {
+      const players = [...new Set((m.match_players||[]).map(mp => mp.players?.name).filter(Boolean))];
+      let winner = '–'; let resultDetail = '';
+      try {
+        const r = JSON.parse(m.result_summary || '{}');
+        winner = r.winner || '–';
+        if (r.wonA !== undefined) resultDetail = `${r.wonA} – ${r.wonB}`;
+        else if (r.totals) resultDetail = r.totals.map(t => `${t.name.split(' ')[0]} ${t.total||t.won}`).join(' · ');
+      } catch {}
+      const date = new Date(m.created_at).toLocaleDateString('de-DE', { day:'numeric', month:'short' });
+      const mc = modeColors[m.game_mode] || { bg:'#f3f4f6', color:'#374151', icon:'⛳' };
+      const isWin = winner !== 'Unentschieden' && winner !== '–';
+      const winnerShort = winner.split('(')[0].trim();
+      const avatars = players.map(n => `<div style="width:28px;height:28px;border-radius:50%;background:var(--light-green);border:2px solid white;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;color:var(--fairway);margin-left:-6px;">${n[0]}</div>`).join('');
+
+      return `<div style="background:white;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden;box-shadow:var(--shadow);">
+        <div style="background:${mc.bg};padding:.75rem 1rem;display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:.78rem;font-weight:700;color:${mc.color};text-transform:uppercase;letter-spacing:.05em;">${mc.icon} ${m.game_mode}</span>
+          <span style="font-size:.78rem;color:${mc.color};opacity:.8;">${date} · ${m.holes||18} Loch</span>
         </div>
-        <div class="match-meta">${playerNames}</div>
-      </div>
-      <div class="match-winner">🏆 ${winner.split('(')[0].trim()}</div>
-    </div>`;
-  }).join('');
+        <div style="padding:1rem;">
+          <div style="display:flex;align-items:center;gap:.25rem;margin-bottom:.75rem;">${avatars}
+            <span style="font-size:.82rem;color:var(--text-muted);margin-left:.5rem;">${players.join(', ')}</span>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <div>
+              <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem;">${isWin ? '🏆 Sieger' : '🤝 Ergebnis'}</div>
+              <div style="font-weight:700;font-size:.95rem;color:var(--deep-rough);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;">${winnerShort}</div>
+            </div>
+            ${resultDetail ? `<div style="font-family:'JetBrains Mono',monospace;font-size:.9rem;font-weight:700;color:var(--fairway);background:var(--light-green);padding:.3rem .6rem;border-radius:6px;">${resultDetail}</div>` : ''}
+          </div>
+        </div>
+      </div>`;
+    }).join('') + '</div>';
 }
 
 // ═══ ANALYTICS ════════════════════════════════════
