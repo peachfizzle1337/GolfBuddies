@@ -830,7 +830,7 @@ function renderOverviewTable() {
   const cellWL = (w, key) => {
     if (!w) return '<td>·</td>';
     if (w === key) return '<td style="color:var(--fairway);font-weight:700;">W</td>';
-    if (w === 'tie') return '<td style="color:var(--gold);font-weight:700;">½</td>';
+    if (w === 'tie') return '<td style="color:var(--gold);font-weight:700;">T</td>';
     return '<td style="color:#ccc;">L</td>';
   };
 
@@ -928,17 +928,17 @@ function computeResult() {
     const winner = totals[0].won > totals[1].won ? totals[0].name : 'Unentschieden';
     return { mode, totals, winner };
   } else {
-    let wonA = 0, wonB = 0, halved = 0;
+    let wonA = 0, wonB = 0, tied = 0;
     holes.forEach(h => {
       const w = scores[h]?.['winner'];
       if (w === 'A') wonA++;
       else if (w === 'B') wonB++;
-      else if (w === 'tie') halved++;
+      else if (w === 'tie') tied++;
     });
     const teamAName = `Team A (${selectedTeamConfig.a.map(p=>p.name).join(' & ')})`;
     const teamBName = `Team B (${selectedTeamConfig.b.map(p=>p.name).join(' & ')})`;
     const winner = wonA > wonB ? teamAName : wonB > wonA ? teamBName : 'Unentschieden';
-    return { mode, wonA, wonB, halved, teamAName, teamBName, winner };
+    return { mode, wonA, wonB, tied, teamAName, teamBName, winner };
   }
 }
 
@@ -972,7 +972,7 @@ function showResultPanel(result) {
       <div style="text-align:center;margin-bottom:1.5rem;">
         <div style="font-size:2rem;">${icon}</div>
         <div style="font-family:'DM Serif Display',serif;font-size:1.5rem;margin:.4rem 0;">${result.winner}${result.winner !== 'Unentschieden' ? ' gewinnt!' : '!'}</div>
-        ${result.halved > 0 ? `<div style="font-size:.85rem;color:var(--text-muted);">${result.halved} Loch/Löcher geteilt</div>` : ''}
+        ${result.tied > 0 ? `<div style="font-size:.85rem;color:var(--text-muted);">${result.tied} Loch/Löcher geteilt</div>` : ''}
       </div>
       <div style="display:flex;justify-content:center;gap:2rem;margin-top:1rem;">
         <div style="text-align:center;"><div style="font-family:'JetBrains Mono',monospace;font-size:2.5rem;font-weight:700;color:var(--fairway);">${result.wonA}</div><div style="font-size:.8rem;color:var(--text-muted);">${result.teamAName}</div></div>
@@ -994,7 +994,7 @@ function buildFinalScorecard() {
   const cellWL = (w, key) => {
     if (!w) return '<td>·</td>';
     if (w === key) return '<td style="color:var(--fairway);font-weight:700;">W</td>';
-    if (w === 'tie') return '<td style="color:var(--gold);font-weight:700;">½</td>';
+    if (w === 'tie') return '<td style="color:var(--gold);font-weight:700;">T</td>';
     return '<td style="color:#ccc;">L</td>';
   };
 
@@ -1080,15 +1080,13 @@ async function loadDashboard() {
         const r = JSON.parse(m.result_summary || '{}');
         winner = r.winner || '–';
         if (r.wonA !== undefined) {
-          const halved = (m.holes||18) - r.wonA - r.wonB;
-          resultDetail = `${r.wonA} – ${halved > 0 ? halved+'½ – ' : ''}${r.wonB}`;
-          if (halved > 0) resultDetail = `${r.wonA} – ${halved}½ – ${r.wonB}`;
-          else resultDetail = `${r.wonA} – ${r.wonB}`;
+          const halved = r.tied !== undefined ? r.tied : (m.holes||18) - r.wonA - r.wonB;
+          resultDetail = halved > 0 ? `${r.wonA} – ${halved} – ${r.wonB}` : `${r.wonA} – ${r.wonB}`;
         } else if (r.totals) {
           if (m.game_mode === 'matchplay') {
-            const total = r.totals.reduce((s,t) => s + (t.won||0), 0);
-            const halved = (m.holes||18) - total;
-            resultDetail = r.totals.map(t => `${t.name?.split(' ')[0]} ${t.won}`).join(' · ') + (halved > 0 ? ` · ${halved}½` : '');
+            const totalWon = r.totals.reduce((s,t) => s + (t.won||0), 0);
+            const halved = (m.holes||18) - totalWon;
+            resultDetail = r.totals.map(t => t.won).join(' – ') + (halved > 0 ? ` – ${halved}` : '');
           } else {
             resultDetail = r.totals.map(t => `${t.name?.split(' ')[0]} ${t.total}`).join(' · ');
           }
@@ -1482,9 +1480,9 @@ async function adminSaveHoles() {
       if (mode === 'scramble') {
         if (winner === 'A') wonA++;
         else if (winner === 'B') wonB++;
-        else { tiedAB += 0.5; }
-        newScores.push({ match_id: matchId, hole_number: hole, player_id: null, team: 'A', strokes: winner==='A'?1:winner==='tie'?0.5:0, winner_key: winner });
-        newScores.push({ match_id: matchId, hole_number: hole, player_id: null, team: 'B', strokes: winner==='B'?1:winner==='tie'?0.5:0, winner_key: winner });
+        else tiedAB++;
+        newScores.push({ match_id: matchId, hole_number: hole, player_id: null, team: 'A', strokes: winner==='A'?1:0, winner_key: winner });
+        newScores.push({ match_id: matchId, hole_number: hole, player_id: null, team: 'B', strokes: winner==='B'?1:0, winner_key: winner });
       } else {
         const playerList = [...new Set(_editingPlayers.map(p => p.player_id))];
         playerList.forEach(pid => {
@@ -1520,6 +1518,7 @@ async function adminSaveHoles() {
     const teamBLabel = `Team B (${teamBNames})`;
     summary.wonA = wonA;
     summary.wonB = wonB;
+    summary.tied = tiedAB;
     summary.teamAName = teamALabel;
     summary.teamBName = teamBLabel;
     summary.winner = wonA > wonB ? teamALabel : wonB > wonA ? teamBLabel : 'Unentschieden';
