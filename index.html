@@ -875,28 +875,32 @@ function computeResult() {
     })).sort((a,b) => a.total - b.total);
     return { mode, totals, winner: totals[0]?.name };
   } else if (mode === 'matchplay') {
-    const pts = {};
-    selectedPlayers.forEach(pid => pts[pid] = 0);
+    const won = {}, halved = {};
+    selectedPlayers.forEach(pid => { won[pid] = 0; halved[pid] = 0; });
     holes.forEach(h => {
-      const hScores = selectedPlayers.map(pid => ({ pid, s: scores[h][pid] || 999 }));
-      const min = Math.min(...hScores.map(x=>x.s));
-      const winners = hScores.filter(x => x.s === min);
-      if (winners.length === 1) pts[winners[0].pid] = (pts[winners[0].pid]||0) + 1;
+      const w = scores[h]?.['winner'];
+      if (!w) return;
+      if (w === 'tie') selectedPlayers.forEach(pid => halved[pid]++);
+      else won[w] = (won[w]||0) + 1;
     });
     const totals = selectedPlayers.map(pid => ({
-      pid, name: allPlayers.find(x=>x.id===pid)?.name || '?', pts: pts[pid]
-    })).sort((a,b) => b.pts - a.pts);
-    return { mode, totals, winner: totals[0]?.name };
+      pid, name: allPlayers.find(x=>x.id===pid)?.name || '?',
+      won: won[pid]||0, halved: halved[pid]||0
+    })).sort((a,b) => b.won - a.won);
+    const winner = totals[0].won > totals[1].won ? totals[0].name : 'Unentschieden';
+    return { mode, totals, winner };
   } else {
-    let ptsA = 0, ptsB = 0;
+    let wonA = 0, wonB = 0, halved = 0;
     holes.forEach(h => {
-      const a = scores[h]['A']||0, b = scores[h]['B']||0;
-      if (a>0 && b>0) { if (a<b) ptsA++; else if (b<a) ptsB++; }
+      const w = scores[h]?.['winner'];
+      if (w === 'A') wonA++;
+      else if (w === 'B') wonB++;
+      else if (w === 'tie') halved++;
     });
     const teamAName = `Team A (${selectedTeamConfig.a.map(p=>p.name).join(' & ')})`;
     const teamBName = `Team B (${selectedTeamConfig.b.map(p=>p.name).join(' & ')})`;
-    const winner = ptsA > ptsB ? teamAName : ptsA < ptsB ? teamBName : 'Unentschieden';
-    return { mode, ptsA, ptsB, teamAName, teamBName, winner };
+    const winner = wonA > wonB ? teamAName : wonB > wonA ? teamBName : 'Unentschieden';
+    return { mode, wonA, wonB, halved, teamAName, teamBName, winner };
   }
 }
 
@@ -916,22 +920,26 @@ function showResultPanel(result) {
     podiumHtml += '</table></div>';
     el.innerHTML = podiumHtml;
   } else if (result.mode === 'matchplay') {
-    let html = `<div style="text-align:center;margin-bottom:1.5rem;"><div style="font-size:2rem;">🏆</div><div style="font-family:'DM Serif Display',serif;font-size:1.5rem;margin:.4rem 0;">${result.winner} gewinnt!</div></div>`;
+    let html = `<div style="text-align:center;margin-bottom:1.5rem;"><div style="font-size:2rem;">🏆</div><div style="font-family:'DM Serif Display',serif;font-size:1.5rem;margin:.4rem 0;">${result.winner}${result.winner !== 'Unentschieden' ? ' gewinnt!' : ''}</div></div>`;
     html += '<div style="overflow-x:auto;"><table class="scorecard-table" style="max-width:400px;margin:0 auto;">';
-    html += '<tr><th>#</th><th>Spieler</th><th>Punkte</th></tr>';
+    html += '<tr><th>#</th><th>Spieler</th><th>Gewonnen</th><th>Geteilt</th></tr>';
     result.totals.forEach((p, i) => {
-      html += `<tr ${i===0?'class="sc-winner"':''}><td>${i+1}</td><td>${p.name}</td><td>${p.pts}</td></tr>`;
+      html += `<tr ${i===0&&result.winner!=='Unentschieden'?'class="sc-winner"':''}><td>${i+1}</td><td>${p.name}</td><td>${p.won}</td><td>${p.halved}</td></tr>`;
     });
     html += '</table></div>';
     el.innerHTML = html;
   } else {
+    const icon = result.winner === 'Unentschieden' ? '🤝' : '🏆';
     el.innerHTML = `
-      <div style="text-align:center;margin-bottom:1.5rem;"><div style="font-size:2rem;">🤝</div>
-      <div style="font-family:'DM Serif Display',serif;font-size:1.5rem;margin:.4rem 0;">${result.winner}!</div></div>
+      <div style="text-align:center;margin-bottom:1.5rem;">
+        <div style="font-size:2rem;">${icon}</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:1.5rem;margin:.4rem 0;">${result.winner}${result.winner !== 'Unentschieden' ? ' gewinnt!' : '!'}</div>
+        ${result.halved > 0 ? `<div style="font-size:.85rem;color:var(--text-muted);">${result.halved} Loch/Löcher geteilt</div>` : ''}
+      </div>
       <div style="display:flex;justify-content:center;gap:2rem;margin-top:1rem;">
-        <div style="text-align:center;"><div style="font-family:'JetBrains Mono',monospace;font-size:2.5rem;font-weight:700;color:var(--fairway);">${result.ptsA}</div><div style="font-size:.8rem;color:var(--text-muted);">${result.teamAName}</div></div>
+        <div style="text-align:center;"><div style="font-family:'JetBrains Mono',monospace;font-size:2.5rem;font-weight:700;color:var(--fairway);">${result.wonA}</div><div style="font-size:.8rem;color:var(--text-muted);">${result.teamAName}</div></div>
         <div style="display:flex;align-items:center;font-size:1.5rem;color:var(--text-muted);">vs</div>
-        <div style="text-align:center;"><div style="font-family:'JetBrains Mono',monospace;font-size:2.5rem;font-weight:700;color:var(--fairway);">${result.ptsB}</div><div style="font-size:.8rem;color:var(--text-muted);">${result.teamBName}</div></div>
+        <div style="text-align:center;"><div style="font-family:'JetBrains Mono',monospace;font-size:2.5rem;font-weight:700;color:var(--fairway);">${result.wonB}</div><div style="font-size:.8rem;color:var(--text-muted);">${result.teamBName}</div></div>
       </div>`;
   }
 
@@ -943,12 +951,26 @@ function buildFinalScorecard() {
   const mode = currentMatch.game_mode;
   const holes = Array.from({ length: currentMatch.holes }, (_, i) => i + 1);
   const table = document.getElementById('final-scorecard-table');
-  let html = '<tr><th class="sc-name">Spieler</th>' + holes.map(h=>`<th>${h}</th>`).join('') + '<th>∑</th></tr>';
+  let html = '<tr><th class="sc-name">Spieler</th>' + holes.map(h=>`<th>${h}</th>`).join('') + '<th>W</th></tr>';
+
+  const cellWL = (w, key) => {
+    if (!w) return '<td>·</td>';
+    if (w === key) return '<td style="color:var(--fairway);font-weight:700;">W</td>';
+    if (w === 'tie') return '<td style="color:var(--gold);font-weight:700;">½</td>';
+    return '<td style="color:#ccc;">L</td>';
+  };
+
   if (mode === 'scramble') {
     ['A','B'].forEach(team => {
       const label = team==='A' ? `A: ${selectedTeamConfig.a.map(p=>p.name).join(' & ')}` : `B: ${selectedTeamConfig.b.map(p=>p.name).join(' & ')}`;
-      const total = holes.reduce((s,h) => s+(scores[h][team]||0), 0);
-      html += `<tr><td class="sc-name">${label}</td>${holes.map(h=>`<td>${scores[h][team]||0}</td>`).join('')}<td class="sc-total">${total}</td></tr>`;
+      const won = holes.filter(h => scores[h]?.['winner'] === team).length;
+      html += `<tr><td class="sc-name">${label}</td>${holes.map(h=>cellWL(scores[h]?.['winner'],team)).join('')}<td class="sc-total">${won}</td></tr>`;
+    });
+  } else if (mode === 'matchplay') {
+    selectedPlayers.forEach(pid => {
+      const p = allPlayers.find(x=>x.id===pid);
+      const won = holes.filter(h => scores[h]?.['winner'] === pid).length;
+      html += `<tr><td class="sc-name">${p?.name||'?'}</td>${holes.map(h=>cellWL(scores[h]?.['winner'],pid)).join('')}<td class="sc-total">${won}</td></tr>`;
     });
   } else {
     selectedPlayers.forEach(pid => {
