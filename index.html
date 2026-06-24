@@ -248,6 +248,7 @@
       <div class="auth-toggle">Noch kein Konto? <a onclick="toggleAuth()">Registrieren</a></div>
     </div>
     <div id="auth-register-form" style="display:none">
+      <div class="form-group"><label>Anzeigename</label><input type="text" id="reg-name" placeholder="z.B. Marcel"/></div>
       <div class="form-group"><label>E-Mail</label><input type="email" id="reg-email" placeholder="deine@email.de"/></div>
       <div class="form-group"><label>Passwort</label><input type="password" id="reg-pass" placeholder="Min. 6 Zeichen"/></div>
       <button class="btn btn-primary mt-2" onclick="doRegister()">Konto erstellen</button>
@@ -266,6 +267,7 @@
         <button class="nav-tab active" onclick="showView('dashboard')">Dashboard</button>
         <button class="nav-tab" onclick="showView('new-match')">Neu</button>
         <button class="nav-tab" onclick="showView('analytics')">Stats</button>
+        <button class="nav-tab" id="admin-tab" style="display:none;" onclick="showView('admin')">⚙️</button>
       </div>
       <button class="btn-icon" onclick="doLogout()" title="Abmelden" style="color:rgba(255,255,255,0.5);font-size:1rem;">↩</button>
     </div>
@@ -394,6 +396,12 @@
       <div class="section-title">📊 Statistiken</div>
       <div id="analytics-content"><div class="spinner"></div></div>
     </div>
+
+    <!-- ADMIN VIEW -->
+    <div id="view-admin" style="display:none;">
+      <div class="section-title">⚙️ Admin</div>
+      <div id="admin-content"><div class="spinner"></div></div>
+    </div>
   </div>
 </div>
 
@@ -405,6 +413,7 @@
 // ═══════════════════════════════════════════════════
 const SUPABASE_URL = 'https://mefqfqvbdwwaejwsfyfk.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1lZnFmcXZiZHd3YWVqd3NmeWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyODk4OTQsImV4cCI6MjA5Nzg2NTg5NH0.ROTzM0JkpFJmYxjBBnXkyRwranSsRwaSgxojZEX4qa8';
+const ADMIN_EMAIL = 'marcel.loegl@gmail.com'; // nur dieser User sieht Admin-Tab
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -435,7 +444,11 @@ async function onLogin(user) {
   currentUser = user;
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
-  document.getElementById('user-name-display').textContent = user.email.split('@')[0];
+  const displayName = user.user_metadata?.display_name || user.email.split('@')[0];
+  document.getElementById('user-name-display').textContent = displayName;
+  if (user.email === ADMIN_EMAIL) {
+    document.getElementById('admin-tab').style.display = 'block';
+  }
   await loadPlayers();
   await loadDashboard();
 }
@@ -463,9 +476,14 @@ async function doLogin() {
 }
 
 async function doRegister() {
+  const name = document.getElementById('reg-name').value.trim();
   const email = document.getElementById('reg-email').value;
   const pass = document.getElementById('reg-pass').value;
-  const { error } = await sb.auth.signUp({ email, password: pass });
+  if (!name) { document.getElementById('auth-error').textContent = 'Bitte Anzeigename eingeben.'; return; }
+  const { error } = await sb.auth.signUp({
+    email, password: pass,
+    options: { data: { display_name: name } }
+  });
   if (error) {
     document.getElementById('auth-error').style.color = 'var(--danger)';
     document.getElementById('auth-error').textContent = error.message;
@@ -587,13 +605,15 @@ async function startMatch() {
   }
 
   const courseName = document.getElementById('course-name')?.value.trim() || null;
+  const creatorName = currentUser.user_metadata?.display_name || currentUser.email.split('@')[0];
 
   const { data: match, error } = await sb.from('matches').insert({
     game_mode: selectedMode,
     holes: selectedHoles,
     status: 'active',
     course_name: courseName,
-    created_by: currentUser.id
+    created_by: currentUser.id,
+    created_by_name: creatorName
   }).select().single();
   if (error) { showToast('Fehler: ' + error.message); return; }
 
@@ -1077,7 +1097,8 @@ async function loadDashboard() {
           <div style="display:flex;align-items:center;gap:.25rem;margin-bottom:.5rem;">${avatars}
             <span style="font-size:.82rem;color:var(--text-muted);margin-left:.5rem;">${players.join(', ')}</span>
           </div>
-          ${m.course_name ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:.6rem;">📍 ${m.course_name}</div>` : ''}
+          ${m.course_name ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:.4rem;">📍 ${m.course_name}</div>` : ''}
+          ${m.created_by_name ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:.6rem;">👤 ${m.created_by_name}</div>` : ''}
           <div style="display:flex;align-items:center;justify-content:space-between;">
             <div>
               <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem;">${isWin ? '🏆 Sieger' : '🤝 Ergebnis'}</div>
@@ -1251,14 +1272,15 @@ async function loadAnalytics() {
 
 // ═══ NAVIGATION ════════════════════════════════════
 function showView(view) {
-  ['dashboard','new-match','analytics'].forEach(v => {
+  ['dashboard','new-match','analytics','admin'].forEach(v => {
     document.getElementById('view-' + v).style.display = v === view ? 'block' : 'none';
   });
   document.querySelectorAll('.nav-tab').forEach((t, i) => {
-    t.classList.toggle('active', ['dashboard','new-match','analytics'][i] === view);
+    t.classList.toggle('active', ['dashboard','new-match','analytics','admin'][i] === view);
   });
   if (view === 'dashboard') loadDashboard();
   if (view === 'analytics') loadAnalytics();
+  if (view === 'admin') loadAdmin();
   if (view === 'new-match') {
     resetSetup();
     renderPlayerChips();
@@ -1278,6 +1300,82 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowRight') nextHole();
   if (e.key === 'ArrowLeft') prevHole();
 });
+
+// ═══ ADMIN ════════════════════════════════════════
+async function loadAdmin() {
+  if (currentUser?.email !== ADMIN_EMAIL) {
+    document.getElementById('admin-content').innerHTML = '<div class="empty-state"><div class="empty-icon">🔒</div><p>Kein Zugriff.</p></div>';
+    return;
+  }
+  document.getElementById('admin-content').innerHTML = '<div class="spinner"></div>';
+  const { data: matches } = await sb.from('matches')
+    .select('*, match_players(player_id, team, players(name))')
+    .eq('status', 'finished')
+    .order('created_at', { ascending: false });
+
+  const all = matches || [];
+  if (!all.length) {
+    document.getElementById('admin-content').innerHTML = '<div class="empty-state"><div class="empty-icon">⛳</div><p>Keine Matches vorhanden.</p></div>';
+    return;
+  }
+
+  const modeColors = { matchplay:'#dbeafe', strokeplay:'#fef3c7', scramble:'#d1fae5' };
+
+  document.getElementById('admin-content').innerHTML = `
+    <p class="text-muted mb-2">Matches bearbeiten oder löschen. Ergebnis wird als JSON gespeichert.</p>
+    <div style="display:flex;flex-direction:column;gap:.75rem;">
+      ${all.map(m => {
+        const players = [...new Set((m.match_players||[]).map(mp => mp.players?.name).filter(Boolean))].join(', ');
+        const date = new Date(m.created_at).toLocaleDateString('de-DE');
+        let winner = '';
+        try { winner = JSON.parse(m.result_summary||'{}').winner || ''; } catch {}
+        return `<div style="background:white;border-radius:var(--radius);border:1px solid var(--border);padding:1rem;box-shadow:var(--shadow);">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;margin-bottom:.75rem;">
+            <div>
+              <span style="background:${modeColors[m.game_mode]||'#f3f4f6'};font-size:.72rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${m.game_mode}</span>
+              <span class="text-muted" style="margin-left:.5rem;font-size:.82rem;">${date} · ${m.holes||18} Loch · ${players}</span>
+            </div>
+            <button class="btn btn-danger btn-sm" onclick="adminDeleteMatch('${m.id}')">🗑 Löschen</button>
+          </div>
+          <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+            <input id="winner-input-${m.id}" value="${winner}" placeholder="Sieger eintragen…"
+              style="flex:1;min-width:160px;padding:.45rem .75rem;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-size:.88rem;font-family:inherit;"/>
+            <input id="course-input-${m.id}" value="${m.course_name||''}" placeholder="Golfplatz…"
+              style="flex:1;min-width:140px;padding:.45rem .75rem;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-size:.88rem;font-family:inherit;"/>
+            <button class="btn btn-secondary btn-sm" onclick="adminSaveMatch('${m.id}')">💾 Speichern</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+async function adminDeleteMatch(matchId) {
+  if (!confirm('Match wirklich löschen? Alle Scores werden ebenfalls gelöscht.')) return;
+  await sb.from('scores').delete().eq('match_id', matchId);
+  await sb.from('match_players').delete().eq('match_id', matchId);
+  await sb.from('matches').delete().eq('id', matchId);
+  showToast('Match gelöscht.');
+  loadAdmin();
+}
+
+async function adminSaveMatch(matchId) {
+  const winnerInput = document.getElementById('winner-input-' + matchId);
+  const courseInput = document.getElementById('course-input-' + matchId);
+  const newWinner = winnerInput?.value.trim();
+  const newCourse = courseInput?.value.trim();
+
+  // Get current result_summary to patch winner
+  const { data: m } = await sb.from('matches').select('result_summary').eq('id', matchId).single();
+  let summary = {};
+  try { summary = JSON.parse(m?.result_summary || '{}'); } catch {}
+  if (newWinner) summary.winner = newWinner;
+
+  await sb.from('matches').update({
+    result_summary: JSON.stringify(summary),
+    course_name: newCourse || null
+  }).eq('id', matchId);
+  showToast('Gespeichert! ✓');
+}
 
 init();
 </script>
