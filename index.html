@@ -287,8 +287,9 @@
       <div class="stats-grid" id="stats-grid">
         <div class="stat-card"><div class="stat-num" id="stat-matches">–</div><div class="stat-label">Matches</div></div>
         <div class="stat-card"><div class="stat-num" id="stat-holes">–</div><div class="stat-label">Löcher</div></div>
-        <div class="stat-card"><div class="stat-num" id="stat-best-player" style="font-size:1.3rem;">–</div><div class="stat-label">Meiste Siege</div></div>
-        <div class="stat-card"><div class="stat-num" id="stat-last-mode" style="font-size:1.3rem;">–</div><div class="stat-label">Letzter Modus</div></div>
+        <div class="stat-card"><div class="stat-num" id="stat-scramble">–</div><div class="stat-label">🤝 Scramble</div></div>
+        <div class="stat-card"><div class="stat-num" id="stat-matchplay">–</div><div class="stat-label">🥊 Matchplay</div></div>
+        <div class="stat-card"><div class="stat-num" id="stat-strokeplay">–</div><div class="stat-label">✏️ Strokeplay</div></div>
       </div>
       <div id="match-history-list"><div class="spinner"></div></div>
     </div>
@@ -336,13 +337,20 @@
             <button class="btn btn-secondary" id="holes-btn-18" onclick="selectHoles(18)">18 Löcher</button>
           </div>
         </div>
+        <div class="card mb-2">
+          <div class="card-title">Golfplatz <span style="font-weight:400;color:var(--text-muted);font-size:.82rem;">(optional)</span></div>
+          <input class="inline-input" id="course-name" placeholder="z.B. GC München Eichenried"/>
+        </div>
         <button class="btn btn-gold w-full" onclick="startMatch()">Match starten →</button>
       </div>
 
       <!-- SCORECARD PANEL -->
       <div id="scorecard-panel" style="display:none;">
         <div class="flex flex-between items-center mb-2">
-          <div class="section-title" style="margin-bottom:0;">📝 Scorecard</div>
+          <div>
+            <div class="section-title" style="margin-bottom:0;">📝 Scorecard</div>
+            <div id="course-display" style="font-size:.82rem;color:var(--text-muted);margin-top:.2rem;"></div>
+          </div>
           <button class="btn btn-secondary btn-sm" onclick="abandonMatch()">Abbrechen</button>
         </div>
         <div class="running-score" id="running-score-display">
@@ -578,10 +586,13 @@ async function startMatch() {
     selectedTeamConfig.b.forEach(p => teamMap[p.id] = 'B');
   }
 
+  const courseName = document.getElementById('course-name')?.value.trim() || null;
+
   const { data: match, error } = await sb.from('matches').insert({
     game_mode: selectedMode,
     holes: selectedHoles,
     status: 'active',
+    course_name: courseName,
     created_by: currentUser.id
   }).select().single();
   if (error) { showToast('Fehler: ' + error.message); return; }
@@ -615,6 +626,8 @@ function showScorecardPanel() {
   document.getElementById('setup-panel').style.display = 'none';
   document.getElementById('scorecard-panel').style.display = 'block';
   document.getElementById('result-panel').style.display = 'none';
+  const courseEl = document.getElementById('course-display');
+  if (courseEl) courseEl.textContent = currentMatch.course_name ? `📍 ${currentMatch.course_name}` : '';
   renderHoleDots();
   renderScoreInputs();
   renderOverviewTable();
@@ -995,6 +1008,8 @@ function backToDashboard() {
 function resetSetup() {
   selectedPlayers = []; selectedMode = null; selectedHoles = 18; selectedTeamConfig = null;
   currentMatch = null; currentHole = 1; scores = {};
+  const courseInput = document.getElementById('course-name');
+  if (courseInput) courseInput.value = '';
   renderPlayerChips();
   document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('selected'));
   document.getElementById('scramble-team-panel').style.display = 'none';
@@ -1021,21 +1036,9 @@ async function loadDashboard() {
   document.getElementById('stat-matches').textContent = all.length;
   const totalHoles = all.reduce((s,m) => s + (m.holes || 18), 0);
   document.getElementById('stat-holes').textContent = totalHoles;
-
-  const wins = {};
-  all.forEach(m => {
-    try {
-      const r = JSON.parse(m.result_summary || '{}');
-      if (r.winner && r.winner !== 'Unentschieden') {
-        const name = r.winner.split('(')[0].trim().split(' ')[0];
-        wins[name] = (wins[name]||0) + 1;
-      }
-    } catch {}
-  });
-  const topWinner = Object.entries(wins).sort((a,b)=>b[1]-a[1])[0];
-  document.getElementById('stat-best-player').textContent = topWinner ? `${topWinner[0]} (${topWinner[1]}×)` : '–';
-  const lastMode = all[0]?.game_mode;
-  document.getElementById('stat-last-mode').textContent = lastMode ? lastMode.charAt(0).toUpperCase() + lastMode.slice(1) : '–';
+  document.getElementById('stat-scramble').textContent = all.filter(m=>m.game_mode==='scramble').length;
+  document.getElementById('stat-matchplay').textContent = all.filter(m=>m.game_mode==='matchplay').length;
+  document.getElementById('stat-strokeplay').textContent = all.filter(m=>m.game_mode==='strokeplay').length;
 
   const listEl = document.getElementById('match-history-list');
   if (!all.length) {
@@ -1071,9 +1074,10 @@ async function loadDashboard() {
           <span style="font-size:.78rem;color:${mc.color};opacity:.8;">${date} · ${m.holes||18} Loch</span>
         </div>
         <div style="padding:1rem;">
-          <div style="display:flex;align-items:center;gap:.25rem;margin-bottom:.75rem;">${avatars}
+          <div style="display:flex;align-items:center;gap:.25rem;margin-bottom:.5rem;">${avatars}
             <span style="font-size:.82rem;color:var(--text-muted);margin-left:.5rem;">${players.join(', ')}</span>
           </div>
+          ${m.course_name ? `<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:.6rem;">📍 ${m.course_name}</div>` : ''}
           <div style="display:flex;align-items:center;justify-content:space-between;">
             <div>
               <div style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem;">${isWin ? '🏆 Sieger' : '🤝 Ergebnis'}</div>
