@@ -1547,10 +1547,15 @@ async function adminSaveHoles() {
 
   console.log('Saving result_summary:', JSON.stringify(summary));
 
-  await sb.from('matches').update({ result_summary: JSON.stringify(summary) }).eq('id', matchId);
-  showToast('Löcher & Ergebnis gespeichert! ✓');
+  const { error: updateErr } = await sb.from('matches').update({ result_summary: JSON.stringify(summary) }).eq('id', matchId);
+  if (updateErr) {
+    console.error('Update error:', updateErr);
+    showToast('Fehler beim Speichern: ' + updateErr.message);
+  } else {
+    showToast('Löcher & Ergebnis gespeichert! ✓');
+  }
   closeHoleModal();
-  loadAdmin();
+  await loadAdmin();
 }
 
 function closeHoleModal() {
