@@ -1322,7 +1322,7 @@ async function loadAdmin() {
   const modeColors = { matchplay:'#dbeafe', strokeplay:'#fef3c7', scramble:'#d1fae5' };
 
   document.getElementById('admin-content').innerHTML = `
-    <p class="text-muted mb-2">Matches bearbeiten oder löschen. Ergebnis wird als JSON gespeichert.</p>
+    <p class="text-muted mb-2">Matches bearbeiten oder löschen.</p>
     <div style="display:flex;flex-direction:column;gap:.75rem;">
       ${all.map(m => {
         const players = [...new Set((m.match_players||[]).map(mp => mp.players?.name).filter(Boolean))].join(', ');
@@ -1337,16 +1337,142 @@ async function loadAdmin() {
             </div>
             <button class="btn btn-danger btn-sm" onclick="adminDeleteMatch('${m.id}')">🗑 Löschen</button>
           </div>
-          <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+          <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.5rem;">
             <input id="winner-input-${m.id}" value="${winner}" placeholder="Sieger eintragen…"
               style="flex:1;min-width:160px;padding:.45rem .75rem;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-size:.88rem;font-family:inherit;"/>
             <input id="course-input-${m.id}" value="${m.course_name||''}" placeholder="Golfplatz…"
               style="flex:1;min-width:140px;padding:.45rem .75rem;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-size:.88rem;font-family:inherit;"/>
             <button class="btn btn-secondary btn-sm" onclick="adminSaveMatch('${m.id}')">💾 Speichern</button>
           </div>
+          <button class="btn btn-secondary btn-sm w-full" onclick="adminEditHoles('${m.id}','${m.game_mode}',${m.holes||18})">⛳ Löcher bearbeiten</button>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+
+  // Add modal overlay if not exists
+  if (!document.getElementById('hole-edit-modal')) {
+    const modal = document.createElement('div');
+    modal.id = 'hole-edit-modal';
+    modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:500;overflow-y:auto;padding:1.5rem;';
+    modal.innerHTML = `<div style="background:white;border-radius:var(--radius);max-width:600px;margin:0 auto;padding:1.5rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+        <div style="font-family:'DM Serif Display',serif;font-size:1.2rem;color:var(--deep-rough);">⛳ Löcher bearbeiten</div>
+        <button onclick="closeHoleModal()" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--text-muted);">✕</button>
+      </div>
+      <div id="hole-edit-content"></div>
+      <button class="btn btn-gold w-full mt-2" onclick="adminSaveHoles()">💾 Alle Löcher speichern</button>
+    </div>`;
+    document.body.appendChild(modal);
+  }
+}
+
+let _editingMatchId = null;
+let _editingMode = null;
+let _editingHoles = 18;
+let _editingPlayers = [];
+
+async function adminEditHoles(matchId, mode, holes) {
+  _editingMatchId = matchId;
+  _editingMode = mode;
+  _editingHoles = holes;
+
+  // Load scores and players for this match
+  const { data: scoreDat } = await sb.from('scores').select('*').eq('match_id', matchId);
+  const { data: mpDat } = await sb.from('match_players').select('*, players(name)').eq('match_id', matchId);
+  _editingPlayers = mpDat || [];
+
+  const modal = document.getElementById('hole-edit-modal');
+  const content = document.getElementById('hole-edit-content');
+  modal.style.display = 'block';
+
+  const holeArr = Array.from({length: holes}, (_, i) => i + 1);
+
+  if (mode === 'strokeplay') {
+    // Show number inputs per player per hole
+    const playerList = [...new Set(_editingPlayers.map(p => ({ id: p.player_id, name: p.players?.name })))];
+    content.innerHTML = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.85rem;">
+      <tr><th style="text-align:left;padding:.4rem;">Spieler</th>${holeArr.map(h=>`<th style="padding:.4rem;text-align:center;">${h}</th>`).join('')}</tr>
+      ${playerList.map(p => `<tr>
+        <td style="font-weight:600;padding:.4rem;white-space:nowrap;">${p.name}</td>
+        ${holeArr.map(h => {
+          const sc = (scoreDat||[]).find(s => s.player_id === p.id && s.hole_number === h);
+          return `<td style="padding:.3rem;"><input type="number" min="1" max="15" data-pid="${p.id}" data-hole="${h}"
+            value="${sc?.strokes||''}" style="width:40px;text-align:center;border:1px solid var(--border);border-radius:4px;padding:.2rem;font-size:.85rem;"/></td>`;
+        }).join('')}
+      </tr>`).join('')}
+    </table></div>`;
+  } else {
+    // Matchplay / Scramble: winner per hole
+    const isScramble = mode === 'scramble';
+    const teams = isScramble
+      ? [...new Set(_editingPlayers.map(p => p.team).filter(Boolean))]
+      : [];
+    const playerList = isScramble ? [] : [...new Set(_editingPlayers.map(p => ({ id: p.player_id, name: p.players?.name })))];
+
+    const options = isScramble
+      ? [...teams.map(t => {
+          const names = _editingPlayers.filter(p=>p.team===t).map(p=>p.players?.name).join(' & ');
+          return { val: t, label: `Team ${t}: ${names}` };
+        }), { val: 'tie', label: '🤝 Unentschieden' }]
+      : [...playerList.map(p => ({ val: p.id, label: p.name })), { val: 'tie', label: '🤝 Unentschieden' }];
+
+    content.innerHTML = `<div style="display:flex;flex-direction:column;gap:.5rem;">
+      ${holeArr.map(h => {
+        const sc = (scoreDat||[]).find(s => s.hole_number === h);
+        const curWinner = sc?.winner_key || '';
+        return `<div style="display:flex;align-items:center;gap:.75rem;padding:.6rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--white);">
+          <div style="font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--deep-rough);min-width:24px;">${h}</div>
+          <select data-hole="${h}" style="flex:1;padding:.4rem .6rem;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-size:.88rem;font-family:inherit;background:white;">
+            <option value="">– kein Ergebnis –</option>
+            ${options.map(o => `<option value="${o.val}" ${curWinner===o.val?'selected':''}>${o.label}</option>`).join('')}
+          </select>
         </div>`;
       }).join('')}
     </div>`;
+  }
+}
+
+async function adminSaveHoles() {
+  const matchId = _editingMatchId;
+  const mode = _editingMode;
+  const holeArr = Array.from({length: _editingHoles}, (_, i) => i + 1);
+
+  // Delete old scores for this match
+  await sb.from('scores').delete().eq('match_id', matchId);
+
+  const newScores = [];
+  if (mode === 'strokeplay') {
+    document.querySelectorAll('#hole-edit-content input[data-pid]').forEach(inp => {
+      const pid = inp.dataset.pid;
+      const hole = parseInt(inp.dataset.hole);
+      const val = parseInt(inp.value) || 0;
+      if (val > 0) newScores.push({ match_id: matchId, hole_number: hole, player_id: pid, team: null, strokes: val });
+    });
+  } else {
+    document.querySelectorAll('#hole-edit-content select[data-hole]').forEach(sel => {
+      const hole = parseInt(sel.dataset.hole);
+      const winner = sel.value;
+      if (!winner) return;
+      if (mode === 'scramble') {
+        newScores.push({ match_id: matchId, hole_number: hole, player_id: null, team: 'A', strokes: winner==='A'?1:0, winner_key: winner });
+        newScores.push({ match_id: matchId, hole_number: hole, player_id: null, team: 'B', strokes: winner==='B'?1:0, winner_key: winner });
+      } else {
+        const playerList = [...new Set(_editingPlayers.map(p => p.player_id))];
+        playerList.forEach(pid => {
+          newScores.push({ match_id: matchId, hole_number: hole, player_id: pid, team: null, strokes: winner===pid?1:winner==='tie'?0.5:0, winner_key: winner });
+        });
+      }
+    });
+  }
+
+  if (newScores.length) await sb.from('scores').insert(newScores);
+  showToast('Löcher gespeichert! ✓');
+  closeHoleModal();
+}
+
+function closeHoleModal() {
+  document.getElementById('hole-edit-modal').style.display = 'none';
 }
 
 async function adminDeleteMatch(matchId) {
@@ -1363,13 +1489,10 @@ async function adminSaveMatch(matchId) {
   const courseInput = document.getElementById('course-input-' + matchId);
   const newWinner = winnerInput?.value.trim();
   const newCourse = courseInput?.value.trim();
-
-  // Get current result_summary to patch winner
   const { data: m } = await sb.from('matches').select('result_summary').eq('id', matchId).single();
   let summary = {};
   try { summary = JSON.parse(m?.result_summary || '{}'); } catch {}
   if (newWinner) summary.winner = newWinner;
-
   await sb.from('matches').update({
     result_summary: JSON.stringify(summary),
     course_name: newCourse || null
