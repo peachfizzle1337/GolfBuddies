@@ -1438,10 +1438,12 @@ async function adminSaveHoles() {
   const mode = _editingMode;
   const holeArr = Array.from({length: _editingHoles}, (_, i) => i + 1);
 
-  // Delete old scores for this match
   await sb.from('scores').delete().eq('match_id', matchId);
 
   const newScores = [];
+  let wonA = 0, wonB = 0, tiedAB = 0;
+  const playerPts = {};
+
   if (mode === 'strokeplay') {
     document.querySelectorAll('#hole-edit-content input[data-pid]').forEach(inp => {
       const pid = inp.dataset.pid;
@@ -1455,19 +1457,67 @@ async function adminSaveHoles() {
       const winner = sel.value;
       if (!winner) return;
       if (mode === 'scramble') {
-        newScores.push({ match_id: matchId, hole_number: hole, player_id: null, team: 'A', strokes: winner==='A'?1:0, winner_key: winner });
-        newScores.push({ match_id: matchId, hole_number: hole, player_id: null, team: 'B', strokes: winner==='B'?1:0, winner_key: winner });
+        if (winner === 'A') wonA++;
+        else if (winner === 'B') wonB++;
+        else { tiedAB += 0.5; }
+        newScores.push({ match_id: matchId, hole_number: hole, player_id: null, team: 'A', strokes: winner==='A'?1:winner==='tie'?0.5:0, winner_key: winner });
+        newScores.push({ match_id: matchId, hole_number: hole, player_id: null, team: 'B', strokes: winner==='B'?1:winner==='tie'?0.5:0, winner_key: winner });
       } else {
         const playerList = [...new Set(_editingPlayers.map(p => p.player_id))];
         playerList.forEach(pid => {
-          newScores.push({ match_id: matchId, hole_number: hole, player_id: pid, team: null, strokes: winner===pid?1:winner==='tie'?0.5:0, winner_key: winner });
+          const pts = winner===pid ? 1 : winner==='tie' ? 0.5 : 0;
+          playerPts[pid] = (playerPts[pid]||0) + pts;
+          newScores.push({ match_id: matchId, hole_number: hole, player_id: pid, team: null, strokes: pts, winner_key: winner });
         });
       }
     });
   }
 
   if (newScores.length) await sb.from('scores').insert(newScores);
-  showToast('Löcher gespeichert! ✓');
+
+  // Recompute result_summary
+  const { data: m } = await sb.from('matches').select('result_summary, match_players(player_id, team, players(name))').eq('id', matchId).single();
+  let summary = {};
+  try { summary = JSON.parse(m?.result_summary || '{}'); } catch {}
+
+  if (mode === 'scramble') {
+    const mpPlayers = m?.match_players || [];
+    const teamANames = mpPlayers.filter(p=>p.team==='A').map(p=>p.players?.name).join(' & ');
+    const teamBNames = mpPlayers.filter(p=>p.team==='B').map(p=>p.players?.name).join(' & ');
+    const teamALabel = `Team A (${teamANames})`;
+    const teamBLabel = `Team B (${teamBNames})`;
+    summary.wonA = wonA;
+    summary.wonB = wonB;
+    summary.teamAName = teamALabel;
+    summary.teamBName = teamBLabel;
+    summary.winner = wonA > wonB ? teamALabel : wonB > wonA ? teamBLabel : 'Unentschieden';
+  } else if (mode === 'matchplay') {
+    const mpPlayers = m?.match_players || [];
+    const totals = mpPlayers.map(p => ({
+      pid: p.player_id,
+      name: p.players?.name,
+      won: playerPts[p.player_id] || 0
+    })).sort((a,b) => b.won - a.won);
+    summary.totals = totals;
+    summary.winner = totals[0]?.won > (totals[1]?.won||0) ? totals[0].name : 'Unentschieden';
+  } else if (mode === 'strokeplay') {
+    // Recalc strokeplay totals from newScores
+    const totalsMap = {};
+    newScores.forEach(s => {
+      if (s.player_id) totalsMap[s.player_id] = (totalsMap[s.player_id]||0) + s.strokes;
+    });
+    const mpPlayers = m?.match_players || [];
+    const totals = mpPlayers.map(p => ({
+      pid: p.player_id,
+      name: p.players?.name,
+      total: totalsMap[p.player_id] || 0
+    })).sort((a,b) => a.total - b.total);
+    summary.totals = totals;
+    summary.winner = totals[0]?.name || 'Unentschieden';
+  }
+
+  await sb.from('matches').update({ result_summary: JSON.stringify(summary) }).eq('id', matchId);
+  showToast('Löcher & Ergebnis gespeichert! ✓');
   closeHoleModal();
 }
 
@@ -1477,10 +1527,15 @@ function closeHoleModal() {
 
 async function adminDeleteMatch(matchId) {
   if (!confirm('Match wirklich löschen? Alle Scores werden ebenfalls gelöscht.')) return;
-  await sb.from('scores').delete().eq('match_id', matchId);
-  await sb.from('match_players').delete().eq('match_id', matchId);
-  await sb.from('matches').delete().eq('id', matchId);
-  showToast('Match gelöscht.');
+  const { error: e1 } = await sb.from('scores').delete().eq('match_id', matchId);
+  const { error: e2 } = await sb.from('match_players').delete().eq('match_id', matchId);
+  const { error: e3 } = await sb.from('matches').delete().eq('id', matchId);
+  if (e1 || e2 || e3) {
+    console.error('Delete errors:', e1, e2, e3);
+    showToast('Fehler beim Löschen – RLS prüfen!');
+    return;
+  }
+  showToast('Match gelöscht. ✓');
   loadAdmin();
 }
 
