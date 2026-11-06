@@ -2,3 +2,12 @@
 .env
 .env.*
 supabase/.temp/
+
+# iOS app (Capacitor) — dependencies and build output
+ios-app/node_modules/
+ios-app/www/
+ios-app/ios/App/App/public/
+ios-app/ios/App/build/
+ios-app/ios/DerivedData/
+ios-app/ios/**/xcuserdata/
+ios-app/ios/**/.build/

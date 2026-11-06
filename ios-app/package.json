@@ -1,0 +1,14 @@
+{
+  "name": "golf-buddies-ios",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "sync": "cp ../index.html www/index.html && npx cap sync ios",
+    "open": "npx cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/cli": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/ios": "^8.6.0"
+  }
+}

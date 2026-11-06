@@ -1,0 +1,10 @@
+{
+  "appId": "com.marcel.golfbuddies",
+  "appName": "Golf Buddies",
+  "webDir": "www",
+  "backgroundColor": "#1a2e1a",
+  "ios": {
+    "backgroundColor": "#1a2e1a",
+    "contentInset": "never"
+  }
+}
